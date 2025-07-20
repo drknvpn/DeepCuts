@@ -26,6 +26,7 @@ exports.handler = async (event, context) => {
 
   try {
     const { url, quality = '720p' } = JSON.parse(event.body);
+    console.log('Processing URL:', url, 'Quality:', quality);
 
     if (!url) {
       return {
@@ -50,70 +51,104 @@ exports.handler = async (event, context) => {
 
     // YouTube processing
     if (isYouTube) {
+      console.log('Processing YouTube URL...');
+      
+      // Try y2mate API
       try {
-        // Try cobalt.tools for YouTube
-        const cobaltResponse = await fetch('https://api.cobalt.tools/api/json', {
+        const y2mateResponse = await fetch('https://www.y2mate.com/mates/analyzeV2/ajax', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           },
-          body: JSON.stringify({
-            url: url,
-            vQuality: quality.replace('p', ''),
-            vCodec: 'h264',
-            aFormat: 'mp3',
-            isAudioOnly: false
-          })
+          body: `url=${encodeURIComponent(url)}&q_auto=0&ajax=1`
         });
 
-        const cobaltData = await cobaltResponse.json();
+        const y2mateData = await y2mateResponse.json();
+        console.log('Y2mate response:', y2mateData);
         
-        if (cobaltData.status === 'success' || cobaltData.status === 'redirect') {
-          result = {
-            success: true,
-            downloadUrl: cobaltData.url,
-            title: cobaltData.filename || 'youtube_video.mp4',
-            platform: 'YouTube'
-          };
-        }
-      } catch (error) {
-        console.log('Cobalt YouTube error:', error);
-      }
-
-      // Fallback for YouTube
-      if (!result) {
-        try {
-          const fallbackResponse = await fetch('https://api.vevioz.com/api/button/mp4/' + encodeURIComponent(url));
-          const fallbackData = await fallbackResponse.json();
+        if (y2mateData.status === 'ok' && y2mateData.links && y2mateData.links.mp4) {
+          const qualityKey = Object.keys(y2mateData.links.mp4).find(key => 
+            key.includes(quality.replace('p', '')) || key.includes('720')
+          ) || Object.keys(y2mateData.links.mp4)[0];
           
-          if (fallbackData.success && fallbackData.url) {
+          if (y2mateData.links.mp4[qualityKey]) {
             result = {
               success: true,
-              downloadUrl: fallbackData.url,
-              title: fallbackData.title || 'youtube_video.mp4',
+              downloadUrl: y2mateData.links.mp4[qualityKey].url,
+              title: (y2mateData.title || 'youtube_video').replace(/[^a-zA-Z0-9]/g, '_') + '.mp4',
+              platform: 'YouTube'
+            };
+          }
+        }
+      } catch (error) {
+        console.log('Y2mate error:', error.message);
+      }
+
+      // Fallback: Try SaveFrom.net API
+      if (!result) {
+        try {
+          const savefromResponse = await fetch(`https://worker-savefrom-net.herokuapp.com/api/convert?url=${encodeURIComponent(url)}`);
+          const savefromData = await savefromResponse.json();
+          console.log('SaveFrom response:', savefromData);
+          
+          if (savefromData.success && savefromData.url && savefromData.url.length > 0) {
+            const videoUrl = savefromData.url.find(item => 
+              item.quality && item.quality.includes(quality.replace('p', ''))
+            ) || savefromData.url[0];
+            
+            if (videoUrl && videoUrl.url) {
+              result = {
+                success: true,
+                downloadUrl: videoUrl.url,
+                title: (savefromData.meta?.title || 'youtube_video').replace(/[^a-zA-Z0-9]/g, '_') + '.mp4',
+                platform: 'YouTube'
+              };
+            }
+          }
+        } catch (error) {
+          console.log('SaveFrom error:', error.message);
+        }
+      }
+
+      // Last fallback: Simple proxy approach
+      if (!result) {
+        try {
+          const simpleResponse = await fetch('https://api.vevioz.com/api/button/mp4/' + encodeURIComponent(url));
+          const simpleData = await simpleResponse.json();
+          console.log('Simple API response:', simpleData);
+          
+          if (simpleData.success && simpleData.url) {
+            result = {
+              success: true,
+              downloadUrl: simpleData.url,
+              title: (simpleData.title || 'youtube_video').replace(/[^a-zA-Z0-9]/g, '_') + '.mp4',
               platform: 'YouTube'
             };
           }
         } catch (error) {
-          console.log('Fallback YouTube error:', error);
+          console.log('Simple API error:', error.message);
         }
       }
     }
 
     // TikTok processing
     if (isTikTok) {
+      console.log('Processing TikTok URL...');
+      
+      // Try TikWM API
       try {
-        // Try tikwm.com for TikTok
         const tikResponse = await fetch('https://www.tikwm.com/api/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           },
           body: `url=${encodeURIComponent(url)}&hd=1`
         });
 
         const tikData = await tikResponse.json();
+        console.log('TikWM response:', tikData);
         
         if (tikData.code === 0 && tikData.data && tikData.data.play) {
           result = {
@@ -124,47 +159,48 @@ exports.handler = async (event, context) => {
           };
         }
       } catch (error) {
-        console.log('TikTok error:', error);
+        console.log('TikWM error:', error.message);
       }
 
-      // Fallback for TikTok
+      // Fallback: Try SnapTik API
       if (!result) {
         try {
-          const fallbackResponse = await fetch('https://api.cobalt.tools/api/json', {
+          const snaptikResponse = await fetch('https://snaptik.app/abc2.php', {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json',
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
-            body: JSON.stringify({
-              url: url,
-              vQuality: '720',
-              isAudioOnly: false
-            })
+            body: `url=${encodeURIComponent(url)}&lang=en`
           });
 
-          const fallbackData = await fallbackResponse.json();
+          const snaptikData = await snaptikResponse.json();
+          console.log('SnapTik response:', snaptikData);
           
-          if (fallbackData.status === 'success' || fallbackData.status === 'redirect') {
+          if (snaptikData.status === 'ok' && snaptikData.data && snaptikData.data.length > 0) {
+            const videoData = snaptikData.data[0];
             result = {
               success: true,
-              downloadUrl: fallbackData.url,
-              title: fallbackData.filename || 'tiktok_video.mp4',
+              downloadUrl: videoData.url,
+              title: 'tiktok_video.mp4',
               platform: 'TikTok'
             };
           }
         } catch (error) {
-          console.log('Fallback TikTok error:', error);
+          console.log('SnapTik error:', error.message);
         }
       }
     }
 
     if (result) {
+      console.log('Success result:', result);
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify(result),
       };
     } else {
+      console.log('No result found');
       return {
         statusCode: 500,
         headers,
@@ -180,7 +216,7 @@ exports.handler = async (event, context) => {
       statusCode: 500,
       headers,
       body: JSON.stringify({ 
-        error: 'Произошла ошибка при обработке запроса' 
+        error: 'Произошла ошибка при обработке запроса: ' + error.message 
       }),
     };
   }
